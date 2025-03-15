@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"sync"
 	"time"
 	"uptime_monitor/db"
 )
@@ -18,7 +19,9 @@ type Uptime struct {
 var urls = []string{
 	"https://www.pranaybajracharya.com.np",
 	"https://www.pranaybajracharya.com.np/about",
+	"https://www.pranaybajracharya.com.np/projects",
 	"https://www.pranaybajracharya.com.np/blog",
+	"https://www.pranaybajracharya.com.np/blog/debounce-control",
 }
 
 var checkInterval = 60 * time.Second
@@ -30,30 +33,47 @@ func main() {
 	fmt.Println("Starting uptime monitor...")
 
 	for {
+		var wg sync.WaitGroup
+		uptimeGroup := make(chan *Uptime, len(urls))
+
 		for _, url := range urls {
-			go checkUptime(db, url)
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				uptimeGroup <- checkUptime(url)
+			}()
+		}
+		fmt.Println("Waiting uptime...")
+		wg.Wait()
+		fmt.Println("Waiting done...")
+		for range len(urls) {
+			up := <-uptimeGroup
+			if up != nil {
+				insertUptime(db, *up)
+			}
 		}
 		time.Sleep(checkInterval)
 	}
 
 }
 
-func checkUptime(db *sql.DB, url string) {
+func checkUptime(url string) *Uptime {
 	res, err := http.Get(url)
 	if err != nil {
 		fmt.Printf("Error checking %s: %v\n", url, err)
-		return
+		return nil
 	}
 	defer res.Body.Close()
 
 	if res.StatusCode >= 200 && res.StatusCode < 300 {
 		fmt.Printf("%s is up (Status: %d)\n", url, res.StatusCode)
 		uptime := Uptime{url: url, status: true, status_code: res.StatusCode}
-		insertUptime(db, uptime)
+		return &uptime
+
 	} else {
 		fmt.Printf("%s is down (Status: %d)\n", url, res.StatusCode)
 		uptime := Uptime{url: url, status: false, status_code: res.StatusCode}
-		insertUptime(db, uptime)
+		return &uptime
 	}
 }
 
